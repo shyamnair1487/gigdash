@@ -537,66 +537,44 @@ const LeadModal = ({ lead, onClose, onSave }) => {
   );
 };
 
-const MarkContactedModal = ({ leads, onClose, onMarkContacted }) => {
-  const [selected, setSelected] = useState([]);
+const BulkStatusModal = ({ leads, preSelected = [], onClose, onApply }) => {
+  const [selected, setSelected] = useState(preSelected);
+  const [targetStatus, setTargetStatus] = useState("contacted");
 
-  const toggleLead = (id) => {
-    setSelected(prev => 
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
-
-  const toggleAll = () => {
-    if (selected.length === leads.length) {
-      setSelected([]);
-    } else {
-      setSelected(leads.map(l => l.id));
-    }
-  };
+  const toggleLead = (id) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = () => setSelected(selected.length === leads.length ? [] : leads.map(l => l.id));
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <span className="modal-title">Mark as Contacted</span>
+          <span className="modal-title">Bulk Update Status</span>
           <button className="btn btn-sm btn-ghost" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>
-            Select leads you've already messaged manually. They'll be marked as "contacted" and won't appear in Blitz mode.
-          </p>
+          <div className="form-group">
+            <label>Set selected leads to</label>
+            <select className="form-select" value={targetStatus} onChange={e => setTargetStatus(e.target.value)}>
+              {STATUSES.map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+            </select>
+          </div>
           {leads.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon">✓</div>
-              <div className="empty-text">No new leads to mark</div>
-            </div>
+            <div className="empty"><div className="empty-icon">✓</div><div className="empty-text">No leads to update</div></div>
           ) : (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <input 
-                  type="checkbox" 
-                  className="contacted-checkbox"
-                  checked={selected.length === leads.length}
-                  onChange={toggleAll}
-                />
-                <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--muted)" }}>
-                  Select all ({leads.length})
-                </span>
+                <input type="checkbox" className="contacted-checkbox" checked={selected.length === leads.length && leads.length > 0} onChange={toggleAll} />
+                <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--muted)" }}>Select all ({leads.length})</span>
               </div>
               <div className="contacted-list">
                 {leads.map(lead => (
                   <div key={lead.id} className="contacted-item">
-                    <input 
-                      type="checkbox" 
-                      className="contacted-checkbox"
-                      checked={selected.includes(lead.id)}
-                      onChange={() => toggleLead(lead.id)}
-                    />
+                    <input type="checkbox" className="contacted-checkbox" checked={selected.includes(lead.id)} onChange={() => toggleLead(lead.id)} />
                     <div className="contacted-info">
                       <div className="contacted-company">{lead.company}</div>
                       <div className="contacted-meta">
-                        {MARKET_FLAG[lead.market]} {lead.market} • {lead.industry || "—"} 
-                        {lead.whatsapp && ` • ${lead.whatsapp}`}
+                        <span className="badge" style={{ fontSize: 10, padding: "1px 6px", background: STATUS_META[lead.status]?.bg, color: STATUS_META[lead.status]?.color }}>{STATUS_META[lead.status]?.label}</span>
+                        {" "}{MARKET_FLAG[lead.market]} {lead.market} • {lead.industry || "—"}
                       </div>
                     </div>
                   </div>
@@ -607,12 +585,8 @@ const MarkContactedModal = ({ leads, onClose, onMarkContacted }) => {
         </div>
         <div className="modal-footer">
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button 
-            className="btn btn-primary" 
-            onClick={() => onMarkContacted(selected)}
-            disabled={selected.length === 0}
-          >
-            Mark {selected.length} as contacted
+          <button className="btn btn-primary" onClick={() => onApply(selected, targetStatus)} disabled={selected.length === 0}>
+            Update {selected.length} lead{selected.length !== 1 ? "s" : ""} → {STATUS_META[targetStatus]?.label}
           </button>
         </div>
       </div>
@@ -631,6 +605,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null); // null | {} | lead object
   const [markContactedModal, setMarkContactedModal] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
   const [blitzMode, setBlitzMode] = useState(false);
   const [blitzIndex, setBlitzIndex] = useState(0);
 
@@ -682,28 +657,29 @@ export default function App() {
     supabase("DELETE", `/leads?id=eq.${id}`).then(fetchLeads);
   };
 
-  const markAsContacted = async (selectedIds) => {
-    if (selectedIds.length === 0) return;
-    
-    const now = new Date().toISOString();
-    
+  const quickUpdateStatus = async (lead, newStatus) => {
+    const payload = { status: newStatus, last_contacted: new Date().toISOString() };
     if (usingMock) {
-      setLeads(ls => ls.map(l => 
-        selectedIds.includes(l.id) 
-          ? { ...l, status: "contacted", last_contacted: now }
-          : l
-      ));
+      setLeads(ls => ls.map(l => l.id === lead.id ? { ...l, ...payload } : l));
     } else {
-      // Update each lead in Supabase
-      for (const id of selectedIds) {
-        await supabase("PATCH", `/leads?id=eq.${id}`, {
-          status: "contacted",
-          last_contacted: now
-        });
+      await supabase("PATCH", `/leads?id=eq.${lead.id}`, payload);
+      fetchLeads();
+    }
+  };
+
+  const bulkUpdateStatus = async (ids, newStatus) => {
+    if (ids.length === 0) return;
+    const now = new Date().toISOString();
+    const payload = { status: newStatus, last_contacted: now };
+    if (usingMock) {
+      setLeads(ls => ls.map(l => ids.includes(l.id) ? { ...l, ...payload } : l));
+    } else {
+      for (const id of ids) {
+        await supabase("PATCH", `/leads?id=eq.${id}`, payload);
       }
       fetchLeads();
     }
-    
+    setSelectedIds([]);
     setMarkContactedModal(false);
   };
 
@@ -728,6 +704,9 @@ export default function App() {
   const statusCounts = STATUSES.reduce((a, s) => ({ ...a, [s]: leads.filter(l => l.status === s).length }), {});
 
   // Blitz mode — only new leads with whatsapp
+  const toggleSelect = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleSelectAll = () => setSelectedIds(selectedIds.length === filtered.length ? [] : filtered.map(l => l.id));
+
   const blitzLeads = leads.filter(l => l.status === "new" && l.whatsapp);
   const blitzLead = blitzLeads[blitzIndex] || null;
 
@@ -806,15 +785,13 @@ export default function App() {
               <button className={`view-btn ${view === "table" ? "active" : ""}`} onClick={() => setView("table")}>Table</button>
               <button className={`view-btn ${view === "pipeline" ? "active" : ""}`} onClick={() => setView("pipeline")}>Pipeline</button>
             </div>
-            {newLeads.length > 0 && (
-              <button 
+            <button 
                 className="btn" 
                 style={{ background: "rgba(139,92,246,0.1)", borderColor: "rgba(139,92,246,0.3)", color: "#8b5cf6" }}
-                onClick={() => setMarkContactedModal(true)}
+                onClick={() => { setSelectedIds([]); setMarkContactedModal(true); }}
               >
-                ✓ Mark contacted
+                ✎ Bulk update
               </button>
-            )}
             {blitzLeads.length > 0 && (
               <button className="btn" style={{ background: "rgba(37,211,102,0.1)", borderColor: "rgba(37,211,102,0.3)", color: "#25D366" }}
                 onClick={() => { setBlitzIndex(0); setBlitzMode(true); }}>
@@ -903,6 +880,17 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Bulk action bar */}
+              {selectedIds.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "rgba(124,106,247,0.1)", border: "1px solid rgba(124,106,247,0.25)", borderRadius: "var(--radius)", marginBottom: 14 }}>
+                  <span style={{ fontSize: 13, fontFamily: "var(--mono)", color: "var(--accent)" }}>{selectedIds.length} selected</span>
+                  <button className="btn btn-sm btn-primary" onClick={() => setMarkContactedModal(true)}>✎ Update status</button>
+                  <button className="btn btn-sm" style={{ background: "#059669", borderColor: "#059669", color: "#fff" }} onClick={() => bulkUpdateStatus(selectedIds, "won")}>✓ Mark Won</button>
+                  <button className="btn btn-sm" style={{ color: "var(--muted)" }} onClick={() => bulkUpdateStatus(selectedIds, "lost")}>✕ Mark Lost</button>
+                  <button className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }} onClick={() => setSelectedIds([])}>Clear</button>
+                </div>
+              )}
+
               {loading ? (
                 <div className="empty"><div className="empty-icon">⟳</div><div className="empty-text">Loading…</div></div>
               ) : view === "pipeline" ? (
@@ -941,6 +929,11 @@ export default function App() {
                     <table>
                       <thead>
                         <tr>
+                          <th style={{ width: 36 }}>
+                            <input type="checkbox" className="contacted-checkbox"
+                              checked={selectedIds.length === filtered.length && filtered.length > 0}
+                              onChange={toggleSelectAll} />
+                          </th>
                           <th>Company</th>
                           <th>Status</th>
                           <th>Market</th>
@@ -953,7 +946,12 @@ export default function App() {
                       </thead>
                       <tbody>
                         {filtered.map(lead => (
-                          <tr key={lead.id} onClick={() => setModal(lead)}>
+                          <tr key={lead.id} onClick={() => setModal(lead)} style={{ background: selectedIds.includes(lead.id) ? "rgba(124,106,247,0.07)" : undefined }}>
+                            <td onClick={e => e.stopPropagation()} style={{ width: 36 }}>
+                              <input type="checkbox" className="contacted-checkbox"
+                                checked={selectedIds.includes(lead.id)}
+                                onChange={() => toggleSelect(lead.id)} />
+                            </td>
                             <td>
                               <div className="company-cell">
                                 <span className="company-name">{lead.company}</span>
@@ -977,6 +975,26 @@ export default function App() {
                                 {lead.whatsapp && lead.status === "new" && (
                                   <button className="quick-wa" onClick={(e) => quickSendWhatsApp(lead, e)}>💬 Send</button>
                                 )}
+                                {lead.status !== "won" && lead.status !== "lost" && (
+                                  <button
+                                    className="btn btn-sm"
+                                    style={{ background: "#059669", color: "#fff", border: "none", fontWeight: 600 }}
+                                    onClick={(e) => { e.stopPropagation(); quickUpdateStatus(lead, "won"); }}
+                                    title="Mark as Won / Completed"
+                                  >✓ Won</button>
+                                )}
+                                {lead.status !== "lost" && lead.status !== "won" && (() => {
+                                  const nextMap = { new: "contacted", contacted: "replied", replied: "negotiating", negotiating: "won" };
+                                  const next = nextMap[lead.status];
+                                  if (!next) return null;
+                                  return (
+                                    <button
+                                      className="btn btn-sm btn-ghost"
+                                      onClick={(e) => { e.stopPropagation(); quickUpdateStatus(lead, next); }}
+                                      title={`Advance to ${next}`}
+                                    >→ {next.charAt(0).toUpperCase() + next.slice(1)}</button>
+                                  );
+                                })()}
                                 <button className="btn btn-sm btn-ghost" onClick={() => setModal(lead)}>Edit</button>
                                 <button className="btn btn-sm btn-ghost" style={{ color: "var(--red)" }} onClick={() => deleteLead(lead.id)}>Del</button>
                               </div>
@@ -998,10 +1016,11 @@ export default function App() {
       )}
 
       {markContactedModal && (
-        <MarkContactedModal 
-          leads={newLeads} 
+        <BulkStatusModal
+          leads={filtered.length > 0 ? filtered : leads}
+          preSelected={selectedIds}
           onClose={() => setMarkContactedModal(false)}
-          onMarkContacted={markAsContacted}
+          onApply={bulkUpdateStatus}
         />
       )}
 
