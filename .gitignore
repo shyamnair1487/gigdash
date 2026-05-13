@@ -1,0 +1,25 @@
+# Environment variables
+Supabase/.env
+.env
+
+# Python
+Supabase/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Node
+gigdash/node_modules/
+gigdash/.vercel/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+
+# Personal notes
+*.rtf
+commands.txt
+HANDOVER.txt
+Supabase/project_details.txt
